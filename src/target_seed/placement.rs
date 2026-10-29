@@ -67,7 +67,9 @@ pub(super) fn override_build(env: &crate::invocation::InvocationEnv) -> Option<O
 }
 
 /// Environment paths are relative to cwd; file paths are relative to the
-/// directory above `.cargo`. Unknown templates and includes remain unseeded.
+/// directory above `.cargo`. Unknown templates and includes remain unseeded,
+/// except a configured build directory the environment overrides: Cargo
+/// never reads it then.
 pub(super) fn resolve(
     cwd: &Path,
     workspace: &Path,
@@ -110,7 +112,11 @@ pub(super) fn resolve(
             target = base.join(value.as_str().filter(|value| !value.is_empty())?);
         }
         if let Some(value) = settings.get("build-dir") {
-            build = Some(expand(base, value.as_str()?, workspace, cargo_home)?);
+            match expand(base, value.as_str()?, workspace, cargo_home) {
+                Some(path) => build = Some(path),
+                None if build_env.is_some() => {}
+                None => return None,
+            }
         }
     }
     if let Some(value) = target_env {
@@ -222,6 +228,22 @@ mod tests {
         assert_eq!(
             resolve(temp.path(), temp.path(), &home, None, Some(OsStr::new(""))),
             None
+        );
+    }
+
+    #[test]
+    fn environment_build_dir_overrides_an_unexpandable_configured_template() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join(".cargo");
+        write(
+            &home.join("config.toml"),
+            "[build]\nbuild-dir='{workspace-path-hash}'",
+        );
+        assert_eq!(resolve(temp.path(), temp.path(), &home, None, None), None);
+        let env = Some(OsStr::new("build-env"));
+        assert_eq!(
+            resolve(temp.path(), temp.path(), &home, None, env),
+            Some(temp.path().join("build-env"))
         );
     }
 
