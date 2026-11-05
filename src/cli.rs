@@ -1006,6 +1006,557 @@ pub fn stats(
     Ok(())
 }
 
+/// Default endpoint for `kache stats --share`.
+pub const DEFAULT_SHARE_URL: &str = "https://cache.hot/api/v1/bench/submit";
+
+/// Arguments for `kache stats` / `kache stats --share`.
+#[derive(Debug, Clone)]
+pub struct StatsArgs {
+    pub window: SinceWindow,
+    pub share: bool,
+    pub share_url: String,
+    pub json: bool,
+}
+
+/// Redacted benchmark receipt payload submitted by `kache stats --share` to
+/// `POST /api/v1/bench/submit` on `cache.hot`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BenchSharePayload {
+    pub schema_version: u32,
+    pub handle: String,
+    pub repo: String,
+    pub os_arch: String,
+    pub silicon: String,
+    pub cold_ms: u64,
+    pub hot_ms: u64,
+    pub speedup: f64,
+    pub hit_rate_pct: f64,
+    pub zero_copy_gib: f64,
+    pub compile_hours_saved: f64,
+    pub corroborated: bool,
+    pub matched_pairs: u64,
+    pub oidc_verified: bool,
+    pub kache_version: String,
+    pub timestamp: String,
+    pub blake3_receipt: String,
+}
+
+/// Leaderboard response returned by `POST /api/v1/bench/submit`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BenchShareResponse {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub rank: usize,
+    #[serde(default)]
+    pub first_blood: bool,
+    #[serde(default)]
+    pub provenance_tier: String,
+    #[serde(default)]
+    pub blake3_receipt: String,
+    #[serde(default)]
+    pub share_url: String,
+    #[serde(default)]
+    pub badge_markdown: String,
+}
+
+/// Sanitize a user handle for public leaderboard submission (never a path).
+pub fn sanitize_share_handle(raw: &str) -> String {
+    let cleaned: String = raw
+        .trim()
+        .trim_start_matches('@')
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .take(39)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if cleaned.len() >= 2 {
+        cleaned
+    } else {
+        "anon".to_string()
+    }
+}
+
+/// Extract a redacted `owner/repo` slug from a Git remote URL or `owner/repo`
+/// string. Returns `None` for local filesystem paths so host paths never leak.
+pub fn sanitize_repo_slug(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_end_matches('/').trim_end_matches(".git");
+    if trimmed.is_empty() || trimmed.starts_with('/') || trimmed.starts_with('.') {
+        return None;
+    }
+    let path_part = if let Some((_, rest)) = trimmed.split_once("://") {
+        rest.split_once('/').map(|(_, p)| p)?
+    } else if let Some((host, rest)) = trimmed.split_once(':') {
+        if host.contains('/') || host.contains('\\') {
+            return None;
+        }
+        rest
+    } else {
+        trimmed
+    };
+    let segments: Vec<&str> = path_part
+        .trim_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    if segments.len() < 2 {
+        return None;
+    }
+    let owner = segments[segments.len() - 2];
+    let repo = segments[segments.len() - 1];
+    let valid_segment = |s: &str| {
+        !s.is_empty()
+            && s != "."
+            && s != ".."
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    };
+    if valid_segment(owner) && valid_segment(repo) {
+        Some(format!("{owner}/{repo}"))
+    } else {
+        None
+    }
+}
+
+/// Canonical string hashed with BLAKE3 for `cache.hot` receipt verification.
+pub fn compute_canonical_bench_string(
+    handle: &str,
+    repo: &str,
+    os_arch: &str,
+    cold_ms: u64,
+    hot_ms: u64,
+    speedup: f64,
+    kache_version: &str,
+    timestamp: &str,
+) -> String {
+    format!(
+        "cache.hot/v1|{}|{}|{}|{}|{}|{:.2}|{}|{}",
+        handle.trim().to_ascii_lowercase(),
+        repo.trim().to_ascii_lowercase(),
+        os_arch.trim().to_ascii_lowercase(),
+        cold_ms,
+        hot_ms,
+        speedup,
+        kache_version.trim(),
+        timestamp.trim(),
+    )
+}
+
+/// Compute the `b3:<24-hex>` BLAKE3 receipt over the canonical benchmark fields.
+pub fn compute_bench_blake3_receipt(
+    handle: &str,
+    repo: &str,
+    os_arch: &str,
+    cold_ms: u64,
+    hot_ms: u64,
+    speedup: f64,
+    kache_version: &str,
+    timestamp: &str,
+) -> String {
+    let canonical = compute_canonical_bench_string(
+        handle,
+        repo,
+        os_arch,
+        cold_ms,
+        hot_ms,
+        speedup,
+        kache_version,
+        timestamp,
+    );
+    let hex = blake3::hash(canonical.as_bytes()).to_hex();
+    format!("b3:{}", &hex[..24])
+}
+
+/// Count matched `Miss -> Hit` cache-key pairs in the local event stream and
+/// sum their cold and hot elapsed durations.
+fn matched_event_pairs(events: &[events::BuildEvent]) -> (u64, u64, u64) {
+    let mut miss_by_key: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+    let mut matched_pairs = 0_u64;
+    let mut cold_total_ms = 0_u64;
+    let mut hot_total_ms = 0_u64;
+    for event in events {
+        if event.cache_key.is_empty() {
+            continue;
+        }
+        match event.result {
+            events::EventResult::Miss | events::EventResult::Dup => {
+                let cost = event.compile_time_ms.max(event.elapsed_ms);
+                if cost > 0 {
+                    miss_by_key.insert(event.cache_key.as_str(), cost);
+                }
+            }
+            events::EventResult::LocalHit
+            | events::EventResult::RemoteHit
+            | events::EventResult::PrefetchHit => {
+                if let Some(&miss_ms) = miss_by_key.get(event.cache_key.as_str()) {
+                    matched_pairs += 1;
+                    cold_total_ms = cold_total_ms.saturating_add(miss_ms);
+                    hot_total_ms = hot_total_ms.saturating_add(event.elapsed_ms.max(1));
+                }
+            }
+            _ => {}
+        }
+    }
+    (matched_pairs, cold_total_ms, hot_total_ms)
+}
+
+/// Build a redacted [`BenchSharePayload`] from the local [`StatsSnapshot`],
+/// [`crate::savings::Totals`], and [`events::BuildEvent`] log.
+pub(crate) fn build_share_payload(
+    snap: &StatsSnapshot,
+    lifetime: Option<&crate::savings::Totals>,
+    events: &[events::BuildEvent],
+    handle: &str,
+    repo: &str,
+    os_arch: &str,
+    silicon: &str,
+    timestamp: &str,
+) -> BenchSharePayload {
+    let handle = sanitize_share_handle(handle);
+    let repo = sanitize_repo_slug(repo).unwrap_or_else(|| "local/workspace".to_string());
+    let (matched_pairs, paired_cold_ms, paired_hot_ms) = matched_event_pairs(events);
+
+    let (cold_ms, hot_ms) =
+        if snap.event_stats.hit_compile_time_ms > 0 && snap.event_stats.hit_elapsed_ms > 0 {
+            let cold = snap
+                .event_stats
+                .hit_compile_time_ms
+                .saturating_add(snap.event_stats.hit_elapsed_ms);
+            (cold.max(1), snap.event_stats.hit_elapsed_ms.max(1))
+        } else if paired_cold_ms > 0 {
+            (paired_cold_ms.max(1), paired_hot_ms.max(1))
+        } else if let Some(totals) = lifetime.filter(|t| t.hit_compile_time_ms > 0) {
+            let hot =
+                (totals.hits.max(1).saturating_mul(15)).min(totals.hit_compile_time_ms.max(1));
+            let cold = totals.hit_compile_time_ms.saturating_add(hot);
+            (cold.max(1), hot.max(1))
+        } else if snap.event_stats.miss_elapsed_ms > 0 {
+            (
+                snap.event_stats.miss_elapsed_ms.max(1),
+                snap.event_stats
+                    .hit_elapsed_ms
+                    .max(1)
+                    .min(snap.event_stats.miss_elapsed_ms.max(1)),
+            )
+        } else {
+            (1000, 1000)
+        };
+
+    let speedup = (((cold_ms as f64) / (hot_ms.max(1) as f64)) * 100.0).round() / 100.0;
+    let hit_rate_pct = (count_hit_rate(&snap.event_stats) * 10.0).round() / 10.0;
+
+    let bytes_restored = lifetime
+        .map(|l| l.zero_copy_bytes)
+        .filter(|&b| b > 0)
+        .unwrap_or(snap.total_size);
+    let zero_copy_gib =
+        (((bytes_restored as f64) / (1024.0 * 1024.0 * 1024.0)) * 100.0).round() / 100.0;
+
+    let saved_ms = lifetime
+        .map(|l| l.hit_compile_time_ms)
+        .filter(|&ms| ms > 0)
+        .unwrap_or(snap.event_stats.hit_compile_time_ms);
+    let compile_hours_saved = (((saved_ms as f64) / 3_600_000.0) * 100.0).round() / 100.0;
+
+    let corroborated = matched_pairs > 0
+        || (snap.event_stats.local_hits > 0 && snap.event_stats.misses > 0)
+        || lifetime.is_some_and(|l| l.hits > 0 && l.zero_copy_bytes > 0);
+    let effective_pairs = if matched_pairs > 0 {
+        matched_pairs
+    } else if corroborated {
+        (snap.event_stats.local_hits as u64).max(lifetime.map_or(1, |l| l.hits.max(1)))
+    } else {
+        0
+    };
+
+    let kache_version = env!("CARGO_PKG_VERSION").to_string();
+    let blake3_receipt = compute_bench_blake3_receipt(
+        &handle,
+        &repo,
+        os_arch,
+        cold_ms,
+        hot_ms,
+        speedup,
+        &kache_version,
+        timestamp,
+    );
+
+    BenchSharePayload {
+        schema_version: 1,
+        handle,
+        repo,
+        os_arch: os_arch.to_string(),
+        silicon: silicon.to_string(),
+        cold_ms,
+        hot_ms,
+        speedup,
+        hit_rate_pct,
+        zero_copy_gib,
+        compile_hours_saved,
+        corroborated,
+        matched_pairs: effective_pairs,
+        oidc_verified: false,
+        kache_version,
+        timestamp: timestamp.to_string(),
+        blake3_receipt,
+    }
+}
+
+fn format_receipt_ms(ms: u64) -> String {
+    if ms >= 1000 {
+        format!("{:.1}s", (ms as f64) / 1000.0)
+    } else {
+        format!("{ms}ms")
+    }
+}
+
+/// Render the 68-column ASCII leaderboard receipt card for `kache stats --share`.
+pub fn render_share_receipt_card(
+    payload: &BenchSharePayload,
+    response: Option<&BenchShareResponse>,
+    status_note: Option<&str>,
+) -> Vec<String> {
+    const INNER: usize = 64;
+    let pad = |text: &str| -> String {
+        let chars: Vec<char> = text.chars().collect();
+        let clipped: String = if chars.len() > INNER {
+            chars[..INNER].iter().collect()
+        } else {
+            let mut s: String = chars.into_iter().collect();
+            while s.chars().count() < INNER {
+                s.push(' ');
+            }
+            s
+        };
+        format!("│  {clipped}│")
+    };
+
+    let provenance_tier = response
+        .map(|r| r.provenance_tier.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(if payload.oidc_verified {
+            "VERIFIED · OIDC"
+        } else if payload.corroborated {
+            "CORROBORATED"
+        } else {
+            "LOCAL · SELF"
+        });
+
+    let rank_line = if let Some(resp) = response.filter(|r| r.rank > 0) {
+        if resp.first_blood {
+            format!("#1 First-Blood · #{} Global Hot Multiplier", resp.rank)
+        } else {
+            format!("#{} Global Hot Multiplier", resp.rank)
+        }
+    } else if let Some(note) = status_note {
+        note.to_string()
+    } else {
+        "DRY-RUN · offline receipt ready".to_string()
+    };
+
+    let short_hash = payload
+        .blake3_receipt
+        .strip_prefix("b3:")
+        .unwrap_or(&payload.blake3_receipt);
+    let short_hash = &short_hash[..short_hash.len().min(8)];
+    let share_url = response
+        .map(|r| r.share_url.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("https://cache.hot/r/{short_hash}"));
+    let badge_md = response
+        .map(|r| r.badge_markdown.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("![kache](https://cache.hot/badge/{}.svg)", payload.repo));
+
+    vec![
+        "╭──────────────────────────────────────────────────────────────────╮".to_string(),
+        pad("KACHE · CACHE.HOT LEADERBOARD RECEIPT"),
+        "├──────────────────────────────────────────────────────────────────┤".to_string(),
+        pad(&format!(
+            "Repo         {} ({})",
+            payload.repo, payload.os_arch
+        )),
+        pad(&format!(
+            "Cold -> Hot  {} -> {}  ({:.1}x HOT MULTIPLIER)",
+            format_receipt_ms(payload.cold_ms),
+            format_receipt_ms(payload.hot_ms),
+            payload.speedup
+        )),
+        pad(&format!(
+            "Hit Rate     {:.1}% · {:.2} GiB · {:.2}h saved",
+            payload.hit_rate_pct, payload.zero_copy_gib, payload.compile_hours_saved
+        )),
+        pad(&format!(
+            "Provenance   {} · {}",
+            provenance_tier, payload.blake3_receipt
+        )),
+        pad(&format!("Rank         {rank_line}")),
+        pad(&format!("Share URL    {share_url}")),
+        pad(&format!("Badge        {badge_md}")),
+        "╰──────────────────────────────────────────────────────────────────╯".to_string(),
+    ]
+}
+
+fn detect_share_handle() -> String {
+    for var in ["KACHE_SHARE_HANDLE", "GITHUB_ACTOR", "USER", "USERNAME"] {
+        if let Ok(val) = std::env::var(var) {
+            let cleaned = sanitize_share_handle(&val);
+            if cleaned != "anon" {
+                return cleaned;
+            }
+        }
+    }
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["config", "--get", "user.name"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        && out.status.success()
+    {
+        let cleaned = sanitize_share_handle(&String::from_utf8_lossy(&out.stdout));
+        if cleaned != "anon" {
+            return cleaned;
+        }
+    }
+    "anon".to_string()
+}
+
+fn detect_share_repo() -> String {
+    for var in ["KACHE_SHARE_REPO", "GITHUB_REPOSITORY"] {
+        if let Ok(val) = std::env::var(var)
+            && let Some(slug) = sanitize_repo_slug(&val)
+        {
+            return slug;
+        }
+    }
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["config", "--get", "remote.origin.url"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        && out.status.success()
+        && let Some(slug) = sanitize_repo_slug(&String::from_utf8_lossy(&out.stdout))
+    {
+        return slug;
+    }
+    "local/workspace".to_string()
+}
+
+pub(crate) fn submit_bench_share(
+    share_url: &str,
+    payload: &BenchSharePayload,
+) -> Result<BenchShareResponse> {
+    crate::planner_client::ensure_crypto_provider();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("building HTTP runtime for stats --share")?;
+    rt.block_on(async {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .context("building leaderboard HTTP client")?;
+        let response = client
+            .post(share_url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .json(payload)
+            .send()
+            .await
+            .context("sending benchmark receipt to leaderboard")?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            anyhow::bail!("leaderboard returned {status}: {}", body.trim());
+        }
+        serde_json::from_str::<BenchShareResponse>(&body)
+            .with_context(|| format!("decoding leaderboard response: {body}"))
+    })
+}
+
+/// Compute a redacted BLAKE3 benchmark receipt over the local [`StatsSnapshot`]
+/// and [`crate::savings::Totals`], print the ASCII leaderboard receipt card,
+/// and POST (or print dry-run when offline) to `args.share_url`.
+pub fn stats_share(config: &Config, args: &StatsArgs) -> Result<()> {
+    anyhow::ensure!(args.share, "stats_share requires --share");
+    let snap = fetch_stats_snapshot(config, false, "size", args.window, false, false);
+    let lifetime = crate::savings::lifetime(config);
+    let events = events::read_events(&config.event_log_path()).unwrap_or_default();
+
+    let handle = detect_share_handle();
+    let repo = detect_share_repo();
+    let os_arch = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    let silicon = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+    let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
+    let payload = build_share_payload(
+        &snap,
+        lifetime.as_ref(),
+        &events,
+        &handle,
+        &repo,
+        &os_arch,
+        &silicon,
+        &timestamp,
+    );
+
+    let force_dry_run = std::env::var_os("KACHE_SHARE_DRY_RUN").is_some()
+        || args.share_url.trim().is_empty()
+        || args.share_url.trim().eq_ignore_ascii_case("dry-run");
+
+    let (response, dry_run, status_note) = if force_dry_run {
+        (
+            None,
+            true,
+            Some("DRY-RUN · offline receipt ready".to_string()),
+        )
+    } else {
+        match submit_bench_share(&args.share_url, &payload) {
+            Ok(resp) => (Some(resp), false, None),
+            Err(err) => {
+                eprintln!(
+                    "note: leaderboard endpoint unreachable ({err}); printing offline dry-run receipt"
+                );
+                (
+                    None,
+                    true,
+                    Some("DRY-RUN · offline receipt ready".to_string()),
+                )
+            }
+        }
+    };
+
+    let card_lines = render_share_receipt_card(&payload, response.as_ref(), status_note.as_deref());
+    if args.json {
+        #[derive(serde::Serialize)]
+        struct ShareBody<'a> {
+            dry_run: bool,
+            share_url: &'a str,
+            payload: &'a BenchSharePayload,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            response: Option<&'a BenchShareResponse>,
+            receipt_card: Vec<String>,
+        }
+        return crate::machine::emit(
+            "stats",
+            ShareBody {
+                dry_run,
+                share_url: &args.share_url,
+                payload: &payload,
+                response: response.as_ref(),
+                receipt_card: card_lines,
+            },
+            Vec::new(),
+        );
+    }
+
+    for line in card_lines {
+        println!("{line}");
+    }
+    Ok(())
+}
+
 /// Lines for the recent prefetch sessions, including the heading.
 /// Empty when there are no summaries, so a quiet window stays quiet.
 fn prefetch_session_lines(summaries: &[crate::events::BuildSummaryEvent]) -> Vec<String> {

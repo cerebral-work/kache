@@ -1008,7 +1008,19 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
             top,
             record,
             redact,
+            share,
+            share_url,
         }) => {
+            if share {
+                let window = parse_since_window(&since)?;
+                let args = cli::StatsArgs {
+                    window,
+                    share: true,
+                    share_url,
+                    json,
+                };
+                return cli::stats_share(&config, &args);
+            }
             let full = stats_wants_full(
                 full,
                 format.is_some(),
@@ -3088,6 +3100,8 @@ mod tests {
             top: None,
             record: false,
             redact: false,
+            share: false,
+            share_url: cli::DEFAULT_SHARE_URL.to_string(),
         })));
         assert!(command_supports_json(&Some(Commands::Daemon {
             command: Some(DaemonCommands::Status),

@@ -11460,3 +11460,156 @@ fn native_linker_check_reports_the_linker_cc_runs() {
         format!("{} (LLD 22.1.8)", bin.join("ld.alt").display())
     );
 }
+
+#[test]
+fn stats_share_redacts_local_paths_and_computes_blake3_receipt() {
+    assert_eq!(
+        sanitize_repo_slug("https://github.com/Kunobi-Ninja/kache.git"),
+        Some("Kunobi-Ninja/kache".to_string())
+    );
+    assert_eq!(
+        sanitize_repo_slug("git@github.com:bevyengine/bevy.git"),
+        Some("bevyengine/bevy".to_string())
+    );
+    assert_eq!(sanitize_repo_slug("/home/secret/user/workspace"), None);
+    assert_eq!(sanitize_repo_slug("./relative/local/path"), None);
+    assert_eq!(sanitize_share_handle("@ctodie /home/secret"), "ctodiehomesecret");
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = save_manifest_config(dir.path().join("secret-cache-path"), None);
+    let log = config.event_log_path();
+
+    let mut miss =
+        crate::events::BuildEvent::new_for_test("kache_core", crate::events::EventResult::Miss);
+    miss.cache_key = "b3-key-1".to_string();
+    miss.compile_time_ms = 38_400;
+    miss.elapsed_ms = 38_400;
+    crate::events::log_event(&log, &miss).unwrap();
+
+    let mut hit =
+        crate::events::BuildEvent::new_for_test("kache_core", crate::events::EventResult::LocalHit);
+    hit.cache_key = "b3-key-1".to_string();
+    hit.compile_time_ms = 38_400;
+    hit.elapsed_ms = 1_000;
+    crate::events::log_event(&log, &hit).unwrap();
+
+    let snap = snapshot_from_direct_reads(&config, false, "size", SinceWindow::DEFAULT, false);
+    let events = crate::events::read_events(&log).unwrap();
+    let lifetime = crate::savings::Totals {
+        since: chrono::Utc::now(),
+        hits: 42,
+        hit_compile_time_ms: 38_400_000,
+        zero_copy_bytes: 2 * 1024 * 1024 * 1024,
+        copied_bytes: 0,
+        pruned_automatic_bytes: 0,
+        pruned_requested_bytes: 0,
+    };
+
+    let payload = build_share_payload(
+        &snap,
+        Some(&lifetime),
+        &events,
+        "@ctodie",
+        "/home/ctodie/private/filesystem/path",
+        "linux-x86_64",
+        "Linux x86_64",
+        "2026-11-05T14:55:00Z",
+    );
+
+    assert_eq!(payload.handle, "ctodie");
+    assert_eq!(payload.repo, "local/workspace");
+    assert!(payload.corroborated);
+    assert_eq!(payload.matched_pairs, 1);
+    assert_eq!(payload.cold_ms, 39_400);
+    assert_eq!(payload.hot_ms, 1_000);
+    assert_eq!(payload.speedup, 39.4);
+    assert_eq!(payload.zero_copy_gib, 2.0);
+    assert!(payload.blake3_receipt.starts_with("b3:"));
+    assert_eq!(payload.blake3_receipt.len(), 27);
+
+    assert!(
+        payload.blake3_receipt[3..]
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        "receipt must be lowercase hex: {}",
+        payload.blake3_receipt
+    );
+    let canonical = format!(
+        "cache.hot/v1|ctodie|local/workspace|linux-x86_64|39400|1000|39.40|{}|2026-11-05T14:55:00Z",
+        payload.kache_version
+    );
+    let expected_hex = blake3::hash(canonical.as_bytes()).to_hex();
+    assert_eq!(payload.blake3_receipt, format!("b3:{}", &expected_hex[..24]));
+
+    let json = serde_json::to_string(&payload).unwrap();
+    assert!(!json.contains("secret-cache-path"), "{json}");
+    assert!(!json.contains("private/filesystem"), "{json}");
+
+    let response = BenchShareResponse {
+        ok: true,
+        rank: 2,
+        first_blood: true,
+        provenance_tier: "CORROBORATED".to_string(),
+        blake3_receipt: payload.blake3_receipt.clone(),
+        share_url: "https://cache.hot/r/test1234".to_string(),
+        badge_markdown: "![kache](https://cache.hot/badge/local/workspace.svg)".to_string(),
+    };
+    let card = render_share_receipt_card(&payload, Some(&response), None).join("\n");
+    assert!(card.contains("KACHE · CACHE.HOT LEADERBOARD RECEIPT"), "{card}");
+    assert!(card.contains("#1 First-Blood · #2 Global Hot Multiplier"), "{card}");
+    assert!(card.contains(&payload.blake3_receipt), "{card}");
+    assert!(!card.contains("secret-cache-path"), "{card}");
+}
+
+#[test]
+fn stats_share_posts_receipt_to_leaderboard_endpoint_and_supports_dry_run() {
+    use std::io::{Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let n = stream.read(&mut buf).unwrap();
+        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+        let body = r#"{"ok":true,"rank":1,"first_blood":true,"provenance_tier":"CORROBORATED","blake3_receipt":"b3:0123456789abcdef01234567","share_url":"https://cache.hot/r/01234567","badge_markdown":"![kache](https://cache.hot/badge/kunobi-ninja/kache.svg)"}"#;
+        let resp = format!(
+            "HTTP/1.1 201 Created\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(resp.as_bytes()).unwrap();
+        stream.flush().unwrap();
+        req
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = save_manifest_config(dir.path().join("cache"), None);
+    let snap = snapshot_from_direct_reads(&config, false, "size", SinceWindow::DEFAULT, false);
+    let payload = build_share_payload(
+        &snap,
+        None,
+        &[],
+        "ctodie",
+        "kunobi-ninja/kache",
+        "linux-x86_64",
+        "Linux x86_64",
+        "2026-11-05T14:55:00Z",
+    );
+
+    let resp = submit_bench_share(&format!("http://{addr}/api/v1/bench/submit"), &payload).unwrap();
+    assert!(resp.ok);
+    assert_eq!(resp.rank, 1);
+    assert!(resp.first_blood);
+
+    let raw_req = server.join().unwrap();
+    assert!(raw_req.starts_with("POST /api/v1/bench/submit HTTP/1.1"), "{raw_req}");
+    assert!(raw_req.contains(&payload.blake3_receipt), "{raw_req}");
+
+    let dry_args = StatsArgs {
+        window: SinceWindow::DEFAULT,
+        share: true,
+        share_url: "dry-run".to_string(),
+        json: false,
+    };
+    stats_share(&config, &dry_args).unwrap();
+}
