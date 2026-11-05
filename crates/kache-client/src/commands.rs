@@ -292,6 +292,15 @@ enum Commands {
         /// with `redacted`. Implies --full
         #[arg(long)]
         redact: bool,
+
+        /// Compute a redacted BLAKE3 benchmark receipt and share it with the
+        /// cache.hot leaderboard
+        #[arg(long)]
+        share: bool,
+
+        /// Leaderboard submission endpoint for `--share`
+        #[arg(long, default_value = "https://cache.hot/api/v1/bench/submit")]
+        share_url: String,
     },
 
     /// Write cache counters as OTLP JSON, or send build timelines to the
