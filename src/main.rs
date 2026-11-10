@@ -1010,6 +1010,8 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
             redact,
             share,
             share_url,
+            repo,
+            dry_run,
         }) => {
             if share {
                 let window = parse_since_window(&since)?;
@@ -1017,6 +1019,8 @@ fn run_cli(cli: Cli, readiness: Option<kunobi_daemon::readiness::channel::Notifi
                     window,
                     share: true,
                     share_url,
+                    repo,
+                    dry_run,
                     json,
                 };
                 return cli::stats_share(&config, &args);
@@ -3102,6 +3106,8 @@ mod tests {
             redact: false,
             share: false,
             share_url: cli::DEFAULT_SHARE_URL.to_string(),
+            repo: None,
+            dry_run: false,
         })));
         assert!(command_supports_json(&Some(Commands::Daemon {
             command: Some(DaemonCommands::Status),

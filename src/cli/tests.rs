@@ -11608,8 +11608,95 @@ fn stats_share_posts_receipt_to_leaderboard_endpoint_and_supports_dry_run() {
     let dry_args = StatsArgs {
         window: SinceWindow::DEFAULT,
         share: true,
-        share_url: "dry-run".to_string(),
+        share_url: DEFAULT_SHARE_URL.to_string(),
+        repo: Some("kunobi-ninja/kache".to_string()),
+        dry_run: true,
         json: false,
     };
     stats_share(&config, &dry_args).unwrap();
+}
+
+#[test]
+fn stats_share_negative_control_rejects_tampered_and_zero_hit_receipts() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = save_manifest_config(dir.path().join("cache"), None);
+    let log = config.event_log_path();
+
+    let mut miss =
+        crate::events::BuildEvent::new_for_test("tokio", crate::events::EventResult::Miss);
+    miss.cache_key = "b3-key-tokio".to_string();
+    miss.compile_time_ms = 41_600;
+    miss.elapsed_ms = 41_600;
+    crate::events::log_event(&log, &miss).unwrap();
+
+    let mut hit =
+        crate::events::BuildEvent::new_for_test("tokio", crate::events::EventResult::LocalHit);
+    hit.cache_key = "b3-key-tokio".to_string();
+    hit.compile_time_ms = 41_600;
+    hit.elapsed_ms = 2_100;
+    crate::events::log_event(&log, &hit).unwrap();
+
+    let snap = snapshot_from_direct_reads(&config, false, "size", SinceWindow::DEFAULT, false);
+    let events = crate::events::read_events(&log).unwrap();
+    let lifetime = crate::savings::Totals {
+        since: chrono::Utc::now(),
+        hits: 18,
+        hit_compile_time_ms: 41_600,
+        zero_copy_bytes: 512 * 1024 * 1024,
+        copied_bytes: 0,
+        pruned_automatic_bytes: 0,
+        pruned_requested_bytes: 0,
+    };
+
+    let valid = build_share_payload(
+        &snap,
+        Some(&lifetime),
+        &events,
+        "ctodie",
+        "tokio-rs/tokio",
+        "linux-x86_64",
+        "Linux x86_64",
+        "2026-11-10T05:00:00Z",
+    );
+    assert!(
+        verify_bench_share_receipt(&valid),
+        "positive control: valid corroborated receipt must verify"
+    );
+    assert_eq!(valid.zero_copy_bytes, 512 * 1024 * 1024);
+    assert_eq!(valid.zero_copy_pct, 100.0);
+
+    // Negative control 1: tampered cold_ms / speedup / repo fails BLAKE3 verification.
+    let mut tampered_cold = valid.clone();
+    tampered_cold.cold_ms += 10_000;
+    assert!(
+        !verify_bench_share_receipt(&tampered_cold),
+        "negative control: tampered cold_ms must fail receipt verification"
+    );
+
+    let mut tampered_repo = valid.clone();
+    tampered_repo.repo = "vllm-project/vllm".to_string();
+    assert!(
+        !verify_bench_share_receipt(&tampered_repo),
+        "negative control: tampered repo must fail receipt verification"
+    );
+
+    // Negative control 2: zero-hit empty cache stats fail receipt verification.
+    let empty_snap = StatsSnapshot::default();
+    let zero_hit = build_share_payload(
+        &empty_snap,
+        None,
+        &[],
+        "ctodie",
+        "tokio-rs/tokio",
+        "linux-x86_64",
+        "Linux x86_64",
+        "2026-11-10T05:00:00Z",
+    );
+    assert!(!zero_hit.corroborated);
+    assert_eq!(zero_hit.matched_pairs, 0);
+    assert_eq!(zero_hit.zero_copy_bytes, 0);
+    assert!(
+        !verify_bench_share_receipt(&zero_hit),
+        "negative control: zero-hit stats must fail receipt verification"
+    );
 }

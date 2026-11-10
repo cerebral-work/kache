@@ -301,6 +301,14 @@ enum Commands {
         /// Leaderboard submission endpoint for `--share`
         #[arg(long, default_value = "https://cache.hot/api/v1/bench/submit")]
         share_url: String,
+
+        /// Optional `owner/repo` slug for `--share` (overrides git remote detection)
+        #[arg(long)]
+        repo: Option<String>,
+
+        /// Print the `--share` receipt card without POSTing to the leaderboard
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Write cache counters as OTLP JSON, or send build timelines to the

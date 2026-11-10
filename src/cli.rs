@@ -1015,6 +1015,8 @@ pub struct StatsArgs {
     pub window: SinceWindow,
     pub share: bool,
     pub share_url: String,
+    pub repo: Option<String>,
+    pub dry_run: bool,
     pub json: bool,
 }
 
@@ -1031,6 +1033,10 @@ pub struct BenchSharePayload {
     pub hot_ms: u64,
     pub speedup: f64,
     pub hit_rate_pct: f64,
+    #[serde(default)]
+    pub zero_copy_pct: f64,
+    #[serde(default)]
+    pub zero_copy_bytes: u64,
     pub zero_copy_gib: f64,
     pub compile_hours_saved: f64,
     pub corroborated: bool,
@@ -1249,6 +1255,15 @@ pub(crate) fn build_share_payload(
         .map(|l| l.zero_copy_bytes)
         .filter(|&b| b > 0)
         .unwrap_or(snap.total_size);
+    let copied_bytes = lifetime.map(|l| l.copied_bytes).unwrap_or(0);
+    let total_restored = bytes_restored.saturating_add(copied_bytes);
+    let zero_copy_pct = if total_restored > 0 {
+        (((bytes_restored as f64) / (total_restored as f64)) * 1000.0).round() / 10.0
+    } else if hit_rate_pct > 0.0 {
+        100.0
+    } else {
+        0.0
+    };
     let zero_copy_gib =
         (((bytes_restored as f64) / (1024.0 * 1024.0 * 1024.0)) * 100.0).round() / 100.0;
 
@@ -1291,6 +1306,8 @@ pub(crate) fn build_share_payload(
         hot_ms,
         speedup,
         hit_rate_pct,
+        zero_copy_pct,
+        zero_copy_bytes: bytes_restored,
         zero_copy_gib,
         compile_hours_saved,
         corroborated,
@@ -1300,6 +1317,33 @@ pub(crate) fn build_share_payload(
         timestamp: timestamp.to_string(),
         blake3_receipt,
     }
+}
+
+/// Verify a [`BenchSharePayload`]'s BLAKE3 receipt and non-zero cache evidence.
+/// Returns `false` if any benchmark field was tampered with after hashing or if
+/// the payload carries zero cache hits / zero-hit uncorroborated stats.
+pub fn verify_bench_share_receipt(payload: &BenchSharePayload) -> bool {
+    if payload.cold_ms == 0 || payload.hot_ms == 0 || payload.speedup <= 0.0 {
+        return false;
+    }
+    if !payload.corroborated
+        && payload.matched_pairs == 0
+        && payload.hit_rate_pct <= 0.0
+        && payload.zero_copy_bytes == 0
+    {
+        return false;
+    }
+    let expected = compute_bench_blake3_receipt(
+        &payload.handle,
+        &payload.repo,
+        &payload.os_arch,
+        payload.cold_ms,
+        payload.hot_ms,
+        payload.speedup,
+        &payload.kache_version,
+        &payload.timestamp,
+    );
+    payload.blake3_receipt == expected
 }
 
 fn format_receipt_ms(ms: u64) -> String {
@@ -1337,7 +1381,7 @@ pub fn render_share_receipt_card(
         .unwrap_or(if payload.oidc_verified {
             "VERIFIED · OIDC"
         } else if payload.corroborated {
-            "CORROBORATED"
+            "CORROBORATED · BLAKE3"
         } else {
             "LOCAL · SELF"
         });
@@ -1385,8 +1429,8 @@ pub fn render_share_receipt_card(
             payload.speedup
         )),
         pad(&format!(
-            "Hit Rate     {:.1}% · {:.2} GiB · {:.2}h saved",
-            payload.hit_rate_pct, payload.zero_copy_gib, payload.compile_hours_saved
+            "Hit Rate     {:.1}% · {:.1}% zero-copy ({:.2} GiB) · {:.2}h saved",
+            payload.hit_rate_pct, payload.zero_copy_pct, payload.zero_copy_gib, payload.compile_hours_saved
         )),
         pad(&format!(
             "Provenance   {} · {}",
@@ -1485,7 +1529,11 @@ pub fn stats_share(config: &Config, args: &StatsArgs) -> Result<()> {
     let events = events::read_events(&config.event_log_path()).unwrap_or_default();
 
     let handle = detect_share_handle();
-    let repo = detect_share_repo();
+    let repo = args
+        .repo
+        .as_deref()
+        .and_then(sanitize_repo_slug)
+        .unwrap_or_else(detect_share_repo);
     let os_arch = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
     let silicon = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
     let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -1501,9 +1549,19 @@ pub fn stats_share(config: &Config, args: &StatsArgs) -> Result<()> {
         &timestamp,
     );
 
-    let force_dry_run = std::env::var_os("KACHE_SHARE_DRY_RUN").is_some()
-        || args.share_url.trim().is_empty()
-        || args.share_url.trim().eq_ignore_ascii_case("dry-run");
+    let effective_url = if args.share_url == DEFAULT_SHARE_URL {
+        std::env::var("KACHE_LEADERBOARD_URL")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| args.share_url.clone())
+    } else {
+        args.share_url.clone()
+    };
+
+    let force_dry_run = args.dry_run
+        || std::env::var_os("KACHE_SHARE_DRY_RUN").is_some()
+        || effective_url.trim().is_empty()
+        || effective_url.trim().eq_ignore_ascii_case("dry-run");
 
     let (response, dry_run, status_note) = if force_dry_run {
         (
@@ -1512,7 +1570,7 @@ pub fn stats_share(config: &Config, args: &StatsArgs) -> Result<()> {
             Some("DRY-RUN · offline receipt ready".to_string()),
         )
     } else {
-        match submit_bench_share(&args.share_url, &payload) {
+        match submit_bench_share(&effective_url, &payload) {
             Ok(resp) => (Some(resp), false, None),
             Err(err) => {
                 eprintln!(
@@ -1542,7 +1600,7 @@ pub fn stats_share(config: &Config, args: &StatsArgs) -> Result<()> {
             "stats",
             ShareBody {
                 dry_run,
-                share_url: &args.share_url,
+                share_url: &effective_url,
                 payload: &payload,
                 response: response.as_ref(),
                 receipt_card: card_lines,
