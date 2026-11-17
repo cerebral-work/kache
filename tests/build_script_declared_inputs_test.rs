@@ -242,14 +242,20 @@ fn copy_tree(source: &Path, destination: &Path) {
     }
 }
 
-/// Rewrites `path` with `body` and a modification time Cargo sees as newer
-/// than the last build, however coarse the filesystem clock.
+/// Rewrites `path` with `body` and a real kernel modification time strictly
+/// newer than the last build without stamping into the future (which leaves
+/// `mtime > invoked.timestamp` across subsequent fast cached builds).
 fn edit(path: &Path, body: &str) {
+    let before = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+    std::thread::sleep(std::time::Duration::from_millis(20));
     std::fs::write(path, body).unwrap();
-    let later = filetime::FileTime::from_system_time(
-        std::time::SystemTime::now() + std::time::Duration::from_secs(2),
-    );
-    filetime::set_file_mtime(path, later).unwrap();
+    if let Some(prev) = before {
+        while std::fs::metadata(path).unwrap().modified().unwrap() <= prev {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::fs::write(path, body).unwrap();
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(5));
 }
 
 #[test]

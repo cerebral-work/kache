@@ -1222,31 +1222,32 @@ pub(crate) fn build_share_payload(
     let repo = sanitize_repo_slug(repo).unwrap_or_else(|| "local/workspace".to_string());
     let (matched_pairs, paired_cold_ms, paired_hot_ms) = matched_event_pairs(events);
 
-    let (cold_ms, hot_ms) = if snap.event_stats.hit_compile_time_ms > 0
-        && snap.event_stats.hit_elapsed_ms > 0
-    {
-        let cold = snap
-            .event_stats
-            .hit_compile_time_ms
-            .saturating_add(snap.event_stats.hit_elapsed_ms);
-        (cold.max(1), snap.event_stats.hit_elapsed_ms.max(1))
-    } else if paired_cold_ms > 0 {
-        (paired_cold_ms.max(1), paired_hot_ms.max(1))
-    } else if let Some(totals) = lifetime.filter(|t| t.hit_compile_time_ms > 0) {
-        let hot = (totals.hits.max(1).saturating_mul(15)).min(totals.hit_compile_time_ms.max(1));
-        let cold = totals.hit_compile_time_ms.saturating_add(hot);
-        (cold.max(1), hot.max(1))
-    } else if snap.event_stats.miss_elapsed_ms > 0 {
-        (
-            snap.event_stats.miss_elapsed_ms.max(1),
-            snap.event_stats
-                .hit_elapsed_ms
-                .max(1)
-                .min(snap.event_stats.miss_elapsed_ms.max(1)),
-        )
-    } else {
-        (1000, 1000)
-    };
+    #[rustfmt::skip]
+    let (cold_ms, hot_ms) =
+        if snap.event_stats.hit_compile_time_ms > 0 && snap.event_stats.hit_elapsed_ms > 0 {
+            let cold = snap
+                .event_stats
+                .hit_compile_time_ms
+                .saturating_add(snap.event_stats.hit_elapsed_ms);
+            (cold.max(1), snap.event_stats.hit_elapsed_ms.max(1))
+        } else if paired_cold_ms > 0 {
+            (paired_cold_ms.max(1), paired_hot_ms.max(1))
+        } else if let Some(totals) = lifetime.filter(|t| t.hit_compile_time_ms > 0) {
+            let hot =
+                (totals.hits.max(1).saturating_mul(15)).min(totals.hit_compile_time_ms.max(1));
+            let cold = totals.hit_compile_time_ms.saturating_add(hot);
+            (cold.max(1), hot.max(1))
+        } else if snap.event_stats.miss_elapsed_ms > 0 {
+            (
+                snap.event_stats.miss_elapsed_ms.max(1),
+                snap.event_stats
+                    .hit_elapsed_ms
+                    .max(1)
+                    .min(snap.event_stats.miss_elapsed_ms.max(1)),
+            )
+        } else {
+            (1000, 1000)
+        };
 
     let speedup = (((cold_ms as f64) / (hot_ms.max(1) as f64)) * 100.0).round() / 100.0;
     let hit_rate_pct = (count_hit_rate(&snap.event_stats) * 10.0).round() / 10.0;
@@ -1415,7 +1416,8 @@ pub fn render_share_receipt_card(
         .map(str::to_string)
         .unwrap_or_else(|| format!("![kache](https://cache.hot/badge/{}.svg)", payload.repo));
 
-    vec![
+    #[rustfmt::skip]
+    let cards = vec![
         "╭──────────────────────────────────────────────────────────────────╮".to_string(),
         pad("KACHE · CACHE.HOT LEADERBOARD RECEIPT"),
         "├──────────────────────────────────────────────────────────────────┤".to_string(),
@@ -1431,10 +1433,7 @@ pub fn render_share_receipt_card(
         )),
         pad(&format!(
             "Hit Rate     {:.1}% · {:.1}% zero-copy ({:.2} GiB) · {:.2}h saved",
-            payload.hit_rate_pct,
-            payload.zero_copy_pct,
-            payload.zero_copy_gib,
-            payload.compile_hours_saved
+            payload.hit_rate_pct, payload.zero_copy_pct, payload.zero_copy_gib, payload.compile_hours_saved
         )),
         pad(&format!(
             "Provenance   {} · {}",
@@ -1444,7 +1443,8 @@ pub fn render_share_receipt_card(
         pad(&format!("Share URL    {share_url}")),
         pad(&format!("Badge        {badge_md}")),
         "╰──────────────────────────────────────────────────────────────────╯".to_string(),
-    ]
+    ];
+    cards
 }
 
 fn detect_share_handle() -> String {

@@ -11571,6 +11571,45 @@ fn stats_share_redacts_local_paths_and_computes_blake3_receipt() {
     );
     assert!(card.contains(&payload.blake3_receipt), "{card}");
     assert!(!card.contains("secret-cache-path"), "{card}");
+
+    let mut zero_elapsed =
+        snapshot_from_direct_reads(&config, false, "size", SinceWindow::DEFAULT, false);
+    zero_elapsed.event_stats.hit_elapsed_ms = 0;
+    zero_elapsed.event_stats.miss_elapsed_ms = 0;
+    let fallback_elapsed = build_share_payload(
+        &zero_elapsed,
+        None,
+        &[],
+        "@ctodie",
+        "cerebral-work/kache",
+        "linux-x86_64",
+        "Linux x86_64",
+        "2026-11-05T14:55:00Z",
+    );
+    assert_eq!(
+        (fallback_elapsed.cold_ms, fallback_elapsed.hot_ms),
+        (1000, 1000)
+    );
+
+    let mut zero_compile =
+        snapshot_from_direct_reads(&config, false, "size", SinceWindow::DEFAULT, false);
+    zero_compile.event_stats.hit_compile_time_ms = 0;
+    zero_compile.event_stats.hit_elapsed_ms = 500;
+    zero_compile.event_stats.miss_elapsed_ms = 0;
+    let fallback_compile = build_share_payload(
+        &zero_compile,
+        None,
+        &[],
+        "@ctodie",
+        "cerebral-work/kache",
+        "linux-x86_64",
+        "Linux x86_64",
+        "2026-11-05T14:55:00Z",
+    );
+    assert_eq!(
+        (fallback_compile.cold_ms, fallback_compile.hot_ms),
+        (1000, 1000)
+    );
 }
 
 #[test]
