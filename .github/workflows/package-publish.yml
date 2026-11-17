@@ -56,6 +56,9 @@ jobs:
   # workflow_dispatch the inputs do (with "latest"/"auto" resolution).
   # ---------------------------------------------------------------------------
   resolve:
+    # Upstream OS package channels (apt on R2, homebrew-kunobi, winget, scoop,
+    # chocolatey, AUR) require kunobi-ninja credentials and stay guarded here so
+    # `cerebral-work/kache` GitHub Releases skip downstream package jobs cleanly.
     if: github.repository == 'kunobi-ninja/kache'
     runs-on: ubuntu-latest
     timeout-minutes: 5

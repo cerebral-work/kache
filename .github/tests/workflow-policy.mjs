@@ -91,6 +91,7 @@ const privateVars = {
 };
 const publicRepos = [
   "kunobi-ninja/kache",
+  "cerebral-work/kache",
   "Zondax/example",
   "contributor/example",
 ];
@@ -203,25 +204,91 @@ for (const [name, expression] of routing) {
   }
 }
 
+const canonicalOnly = new Set(["kunobi-ninja/kache"]);
+const githubReleaseRepos = new Set([
+  "kunobi-ninja/kache",
+  "cerebral-work/kache",
+]);
 const publication = [
-  ["ci.yml", "release"],
-  ["ci.yml", "stable-branch"],
-  ["ci.yml", "publish-chart"],
-  ["publish-crates.yaml", "publish"],
-  ["package-publish.yml", "resolve"],
-  ["service-image.yml", "release"],
+  ["ci.yml", "release", githubReleaseRepos],
+  ["ci.yml", "stable-branch", canonicalOnly],
+  ["ci.yml", "publish-chart", canonicalOnly],
+  ["publish-crates.yaml", "publish", canonicalOnly],
+  ["package-publish.yml", "resolve", canonicalOnly],
+  ["service-image.yml", "release", canonicalOnly],
 ];
-for (const [file, id] of publication) {
-  for (const repository of [...publicRepos, ...privateRepos]) {
+for (const [file, id, allowedRepos] of publication) {
+  for (const [repository, privateRepo] of [
+    ...publicRepos.map((r) => [r, false]),
+    ...privateRepos.map((r) => [r, true]),
+  ]) {
     eq(
       evaluate(
         files[file].jobs[id].if,
-        context(repository, repository !== "kunobi-ninja/kache", {}, "push"),
+        context(repository, privateRepo, {}, "push"),
       ),
-      repository === "kunobi-ninja/kache",
+      allowedRepos.has(repository),
       `${file}:${id} canonical publication`,
     );
   }
+}
+{
+  const releaseWith = files["ci.yml"].jobs.release.with;
+  const upstream = context("kunobi-ninja/kache", false, {}, "push");
+  eq(
+    resolveRunner(releaseWith.runner_linux, upstream),
+    "kunobi-runners",
+    "ci.yml:release upstream Linux runner",
+  );
+  eq(
+    resolveRunner(releaseWith.runner_macos, upstream),
+    '["self-hosted", "macOS", "ARM64", "mac-mini"]',
+    "ci.yml:release upstream macOS runner",
+  );
+  for (const flag of ["build_deb", "enable_signing", "notarize_macos"]) {
+    eq(
+      resolveRunner(releaseWith[flag], upstream),
+      true,
+      `ci.yml:release upstream ${flag}`,
+    );
+  }
+  for (const vars of [{}, privateVars]) {
+    const forkPublic = context("cerebral-work/kache", false, vars, "push");
+    eq(
+      JSON.parse(resolveRunner(releaseWith.runner_linux, forkPublic)),
+      "ubuntu-latest",
+      "ci.yml:release cerebral-work public Linux runner",
+    );
+    eq(
+      JSON.parse(resolveRunner(releaseWith.runner_macos, forkPublic)),
+      "macos-latest",
+      "ci.yml:release cerebral-work public macOS runner",
+    );
+    for (const flag of ["build_deb", "enable_signing", "notarize_macos"]) {
+      eq(
+        resolveRunner(releaseWith[flag], forkPublic),
+        false,
+        `ci.yml:release cerebral-work ${flag} disabled without KMS`,
+      );
+    }
+  }
+  const forkPrivate = context("cerebral-work/kache", true, privateVars, "push");
+  eq(
+    JSON.parse(resolveRunner(releaseWith.runner_linux, forkPrivate)),
+    "private-linux",
+    "ci.yml:release cerebral-work private Linux runner",
+  );
+  eq(
+    JSON.parse(resolveRunner(releaseWith.runner_macos, forkPrivate)),
+    JSON.parse(privateVars.CI_RUNNER_MACOS),
+    "ci.yml:release cerebral-work private macOS runner",
+  );
+  checks++;
+  assert.throws(
+    () => resolveRunner(releaseWith.runner_linux, context("cerebral-work/kache", true, {}, "push")),
+    undefined,
+    "ci.yml:release cerebral-work missing private Linux selector",
+  );
 }
 const packageJobs = files["package-publish.yml"].jobs;
 function dependsOnResolve(id, seen = new Set()) {
@@ -421,6 +488,7 @@ eq(
 for (const [repo, privateRepo] of [
   ["Zondax/kache", true],
   ["kunobi-ninja/kache", false],
+  ["cerebral-work/kache", false],
 ]) {
   const ctx = context(repo, privateRepo, privateVars, "push");
   Object.assign(ctx.github, {ref: "refs/heads/dev", ref_name: "dev", ref_type: "branch"});

@@ -30,6 +30,9 @@ dispatched manually without enabling the nightly schedule.
 
 Release signing, the stable branch, crates.io, package repositories, Helm
 charts, and service image publication run only in `kunobi-ninja/kache`.
+In `cerebral-work/kache`, `v*` tags also publish checksummed GitHub Release
+archives from hosted runners without signing secrets, crates.io pushes, or
+package-manager dispatches.
 Copies build the service image without publishing it. Their normal CI and
 packaging validation do not require upstream release credentials.
 
