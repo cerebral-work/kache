@@ -466,11 +466,12 @@ jobs:
           cache-key-prefix: kache-mutants
       - name: Mutate changed Rust behavior
         timeout-minutes: 45
+        # Step-local RUSTC_WRAPPER="" overrides kache-action's GITHUB_ENV export
+        # and keeps default debug profile so out_dir_alias_test exercises real
+        # OUT_DIR DWARF baking against the in-tree kache binary under test.
         env:
+          RUSTC_WRAPPER: ""
           CARGO_INCREMENTAL: "1"
-          CARGO_PROFILE_DEV_DEBUG: "0"
-          CARGO_PROFILE_TEST_DEBUG: "0"
-          KACHE_READ_ONLY: ${{ github.ref == 'refs/heads/main' && 'false' || 'true' }}
         run: |
           test -s tmp/mutants/pr.diff
           # Shard 0 checks the unmutated baseline for the whole matrix.
