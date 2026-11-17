@@ -1617,7 +1617,10 @@ jobs:
     # *skipped* gate never resolves as success-equivalent and silently un-gates
     # the release. If you relax this `if:`, relax the gate's too (or drop the
     # gate's `if:` so it always runs).
-    if: github.repository == 'kunobi-ninja/kache' && startsWith(github.ref, 'refs/tags/v')
+    # `cerebral-work/kache` builds checksummed GitHub Release archives on hosted
+    # runners without upstream KMS signing, while crates.io and OS package
+    # channels stay guarded on `kunobi-ninja/kache`.
+    if: (github.repository == 'kunobi-ninja/kache' || github.repository == 'cerebral-work/kache') && startsWith(github.ref, 'refs/tags/v')
     # Gate the release (and, transitively, the crates publish it triggers) on
     # the full validation suite — `version-consistency` rejects a tag that
     # disagrees with the manifest BEFORE any binary builds; `e2e` includes the
@@ -1640,8 +1643,10 @@ jobs:
       binary_name: kache
       companion_binaries: '["kache-engine"]'
       cache_windows_sysroot: true
-      # Include both binaries in Debian packages and release archives.
-      build_deb: true
+      # Include both binaries in Debian packages on kunobi-ninja/kache.
+      # _release-rust.yml runs KMS OpenPGP signing unconditionally when build_deb
+      # is true, so repositories without kunobi-ninja KMS secrets skip .deb here.
+      build_deb: ${{ github.repository == 'kunobi-ninja/kache' }}
       # Winget installs the ZIP so kache-engine stays beside the frontend.
       upload_windows_exe: false
       # Both Windows targets (x64 + arm64) ship as `-pc-windows-msvc`, cross-built
@@ -1658,7 +1663,8 @@ jobs:
       # ring's asm step. blake3 also uses its `pure` feature on Windows (see
       # Cargo.toml) since its arm64 NEON C doesn't cross-compile.
       targets: '["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]'
-      runner_macos: '["self-hosted", "macOS", "ARM64", "mac-mini"]'
+      runner_linux: ${{ github.repository == 'kunobi-ninja/kache' && 'kunobi-runners' || toJSON(fromJSON(!github.event.repository.private && '"ubuntu-latest"' || vars.CI_RUNNER_LINUX)) }}
+      runner_macos: ${{ github.repository == 'kunobi-ninja/kache' && '["self-hosted", "macOS", "ARM64", "mac-mini"]' || toJSON(fromJSON(!github.event.repository.private && '"macos-latest"' || vars.CI_RUNNER_MACOS)) }}
       extra_build_env: |
         KACHE_VERSION=${{ github.ref_name }}
         # Statically link the MSVC CRT into the Windows binaries. Without this the
@@ -1674,9 +1680,9 @@ jobs:
         # musl/darwin matrix legs ignore these.
         CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-C target-feature=+crt-static
         CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_RUSTFLAGS=-C target-feature=+crt-static
-      # --- GCP-KMS code signing (reuses the CODESIGN_* identity for all platforms) ---
-      enable_signing: true
-      notarize_macos: true
+      # --- GCP-KMS code signing (reuses the CODESIGN_* identity on kunobi-ninja/kache) ---
+      enable_signing: ${{ github.repository == 'kunobi-ninja/kache' }}
+      notarize_macos: ${{ github.repository == 'kunobi-ninja/kache' }}
       # NOTE: CODESIGN_*/PGP_SIGN_* config is passed via `secrets:` below — they're
       # repo secrets (public repo) and the `secrets` context isn't allowed in `with:`.
       # sha256 pins for the downloaded signers (set as repo vars once known;

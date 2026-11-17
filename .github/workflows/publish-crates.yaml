@@ -9,6 +9,9 @@ permissions:
 
 jobs:
   publish:
+    # crates.io/crates/kache enforces `trustpub_only=true` bound to `kunobi-ninja/kache`.
+    # Fork GitHub Releases (e.g. `cerebral-work/kache`) distribute prebuilt archives
+    # on GitHub Releases and skip crates.io OIDC publication cleanly.
     if: github.repository == 'kunobi-ninja/kache'
     name: Publish crates.io packages
     runs-on: ubuntu-latest
