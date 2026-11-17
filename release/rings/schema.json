@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cerebral.work/schemas/kache/release-ring.schema.json",
+  "title": "Kache Publication Ring Manifest",
+  "description": "Digest-pinned beta or stable publication ring manifest for a declared Kache artifact release unit.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "unit",
+    "channel",
+    "version",
+    "git_commit",
+    "published_at",
+    "binaries",
+    "images",
+    "chart",
+    "previous"
+  ],
+  "properties": {
+    "unit": {
+      "type": "string",
+      "enum": [
+        "kache"
+      ]
+    },
+    "channel": {
+      "type": "string",
+      "enum": [
+        "beta",
+        "stable"
+      ]
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?$"
+    },
+    "git_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "published_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "unreleased": {
+      "type": "boolean"
+    },
+    "min_compatible_version": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?$"
+    },
+    "binaries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/binaryArtifact"
+      }
+    },
+    "images": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ociImageArtifact"
+      }
+    },
+    "chart": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/helmChartArtifact"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "previous": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/previousRingEntry"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "binaryArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_triple",
+        "download_url",
+        "sha256",
+        "signature",
+        "size_bytes"
+      ],
+      "properties": {
+        "target_triple": {
+          "type": "string",
+          "minLength": 1
+        },
+        "download_url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "signature": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ociImageArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "tag",
+        "digest"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "helmChartArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "digest"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?$"
+        },
+        "digest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "previousRingEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "git_commit"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?$"
+        },
+        "git_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "published_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "binaries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/binaryArtifact"
+          }
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ociImageArtifact"
+          }
+        },
+        "chart": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/helmChartArtifact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

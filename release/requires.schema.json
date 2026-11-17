@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cerebral.work/schemas/kache/release-requires.schema.json",
+  "title": "Kache Cross-Unit SemVer Compatibility Floors",
+  "description": "Minimum required bare SemVer 2.0 versions between declared Kache release units evaluated per publication ring.",
+  "type": "object",
+  "propertyNames": {
+    "enum": [
+      "kache"
+    ]
+  },
+  "additionalProperties": {
+    "type": "object",
+    "minProperties": 1,
+    "propertyNames": {
+      "enum": [
+        "kache"
+      ]
+    },
+    "additionalProperties": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?$"
+    }
+  }
+}

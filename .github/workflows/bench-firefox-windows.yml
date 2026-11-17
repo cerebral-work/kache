@@ -158,7 +158,7 @@ jobs:
           # node@lts: Firefox's build needs Node.js (bundling / some codegen). It
           # is normally provided by `mach bootstrap`, which the no-update
           # bootstrap skips, so install it here (user-level, no elevation).
-          install_args: --force rust github:casey/just node@lts
+          install_args: --force rust node@lts
           cache: false
           reshim: false
 
@@ -179,7 +179,7 @@ jobs:
         # $RUNNER_TEMP is a Windows path (C:\…\_temp); convert to forward
         # slashes so the value survives the just/sh layers (see the pull job).
         run: |
-          rustc --version && cargo --version && just --version
+          rustc --version && cargo --version
           # Firefox needs clang-cl, which ans-runners installs into VS Build Tools
           # but is NOT on the default PATH. Prepend its dir so mach discovers it
           # (mach finds the MSVC toolchain + Windows SDK itself via vswhere, so no
@@ -217,7 +217,9 @@ jobs:
           echo "[bench] work dir: $work"
           trace=()
           [ "${{ inputs.trace_keys }}" = true ] && trace=(--trace-keys)
-          just bench firefox-windows --work-dir "$work" "${trace[@]}"
+          cargo build --release -j 2 -p kache
+          cargo build --release -j 2 -p kache-e2e --bin kache-scenario
+          ./target/release/kache-scenario --kache ./target/release/kache --select suite:bench --select backend:kache --profile firefox-windows --work-dir "$work" "${trace[@]}"
         env:
           # Shared mach toolchain pre-provisioned (elevated) by ans-runners
           # (tag: firefox-toolchain). Pointing MOZBUILD_STATE_PATH here makes the
@@ -409,7 +411,7 @@ jobs:
           # node@lts: Firefox's build needs Node.js (bundling / some codegen). It
           # is normally provided by `mach bootstrap`, which --disable-bootstrap
           # skips, so install it here (user-level, no elevation).
-          install_args: --force rust github:casey/just node@lts
+          install_args: --force rust node@lts
           cache: false
           reshim: false
 
@@ -427,7 +429,7 @@ jobs:
         # isolate-tool-state step) so the source dir is ~47 chars. Reports land
         # under that same dir — see the upload paths below.
         run: |
-          rustc --version && cargo --version && just --version
+          rustc --version && cargo --version
           # Firefox needs clang-cl, which ans-runners installs into VS Build Tools
           # but is NOT on the default PATH. Prepend its dir so mach discovers it
           # (mach finds the MSVC toolchain + Windows SDK itself via vswhere, so no
@@ -473,7 +475,9 @@ jobs:
           # works — the non-elevated runner service can't do it, exit 1601).
           # The build runs --disable-bootstrap and consumes that shared toolchain,
           # so the bench NEVER runs `mach bootstrap` itself (no --force-setup).
-          just bench firefox-pull-windows --work-dir "$work"
+          cargo build --release -j 2 -p kache
+          cargo build --release -j 2 -p kache-e2e --bin kache-scenario
+          ./target/release/kache-scenario --kache ./target/release/kache --select suite:bench --select backend:kache --profile firefox-pull-windows --work-dir "$work"
         env:
           # Shared mach toolchain pre-provisioned (elevated) by ans-runners
           # (tag: firefox-toolchain). Pointing MOZBUILD_STATE_PATH here makes the

@@ -29,7 +29,7 @@ jobs:
           version: 2026.6.9
           install: true
           cache: false
-      - run: just check
+      - run: make check
 
   manifest:
     name: MSVC manifest dependency probe

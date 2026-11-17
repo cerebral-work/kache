@@ -11473,7 +11473,10 @@ fn stats_share_redacts_local_paths_and_computes_blake3_receipt() {
     );
     assert_eq!(sanitize_repo_slug("/home/secret/user/workspace"), None);
     assert_eq!(sanitize_repo_slug("./relative/local/path"), None);
-    assert_eq!(sanitize_share_handle("@ctodie /home/secret"), "ctodiehomesecret");
+    assert_eq!(
+        sanitize_share_handle("@ctodie /home/secret"),
+        "ctodiehomesecret"
+    );
 
     let dir = tempfile::tempdir().unwrap();
     let config = save_manifest_config(dir.path().join("secret-cache-path"), None);
@@ -11539,7 +11542,10 @@ fn stats_share_redacts_local_paths_and_computes_blake3_receipt() {
         payload.kache_version
     );
     let expected_hex = blake3::hash(canonical.as_bytes()).to_hex();
-    assert_eq!(payload.blake3_receipt, format!("b3:{}", &expected_hex[..24]));
+    assert_eq!(
+        payload.blake3_receipt,
+        format!("b3:{}", &expected_hex[..24])
+    );
 
     let json = serde_json::to_string(&payload).unwrap();
     assert!(!json.contains("secret-cache-path"), "{json}");
@@ -11555,8 +11561,14 @@ fn stats_share_redacts_local_paths_and_computes_blake3_receipt() {
         badge_markdown: "![kache](https://cache.hot/badge/local/workspace.svg)".to_string(),
     };
     let card = render_share_receipt_card(&payload, Some(&response), None).join("\n");
-    assert!(card.contains("KACHE · CACHE.HOT LEADERBOARD RECEIPT"), "{card}");
-    assert!(card.contains("#1 First-Blood · #2 Global Hot Multiplier"), "{card}");
+    assert!(
+        card.contains("KACHE · CACHE.HOT LEADERBOARD RECEIPT"),
+        "{card}"
+    );
+    assert!(
+        card.contains("#1 First-Blood · #2 Global Hot Multiplier"),
+        "{card}"
+    );
     assert!(card.contains(&payload.blake3_receipt), "{card}");
     assert!(!card.contains("secret-cache-path"), "{card}");
 }
@@ -11602,7 +11614,10 @@ fn stats_share_posts_receipt_to_leaderboard_endpoint_and_supports_dry_run() {
     assert!(resp.first_blood);
 
     let raw_req = server.join().unwrap();
-    assert!(raw_req.starts_with("POST /api/v1/bench/submit HTTP/1.1"), "{raw_req}");
+    assert!(
+        raw_req.starts_with("POST /api/v1/bench/submit HTTP/1.1"),
+        "{raw_req}"
+    );
     assert!(raw_req.contains(&payload.blake3_receipt), "{raw_req}");
 
     let dry_args = StatsArgs {

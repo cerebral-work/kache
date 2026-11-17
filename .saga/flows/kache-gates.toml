@@ -1,0 +1,73 @@
+# Flow: kache-gates
+#
+# Standard quality verification gates for Kache workspace:
+# rustfmt check, version/docs hygiene, client-crates check, clippy (-D warnings, -j 2),
+# workspace tests (-j 2), and Heimdal operator sign-off gate.
+
+[flow]
+name = "kache-gates"
+description = "Execute Kache verification gates: fmt, hygiene, clippy (-D warnings, -j 2), cargo test (-j 2), and operator gate"
+
+[params.package]
+required = false
+default = "kache-core"
+description = "Target crate package for focused test verification"
+
+[[step]]
+id = "fmt-check"
+title = "Verify rustfmt formatting"
+kind = "test"
+agent = "auto"
+verify_cmd = ["make", "fmt-check"]
+prompt = """
+Run `make fmt-check` across workspace, command schema, and fuzz crate sources.
+Ensure there are no formatting violations.
+"""
+
+[[step]]
+id = "hygiene-check"
+title = "Run version consistency, documentation, and resource-guard checks"
+kind = "test"
+agent = "auto"
+deps = ["fmt-check"]
+verify_cmd = ["./scripts/check-version-consistency.sh"]
+prompt = """
+Run `./scripts/check-version-consistency.sh`, `bash scripts/check-docs.sh`, and `make test-resource-guard-check`.
+Ensure workspace manifest versions, Chart.yaml, MDX docs, and resource guards pass cleanly.
+"""
+
+[[step]]
+id = "clippy-check"
+title = "Run clippy linter with warnings denied (-j 2)"
+kind = "test"
+agent = "auto"
+deps = ["hygiene-check"]
+verify_cmd = ["cargo", "clippy", "--workspace", "--locked", "--all-targets", "-j", "2", "--", "-D", "warnings"]
+prompt = """
+Run `cargo clippy --workspace --locked --all-targets -j 2 -- -D warnings` and `make client-crates-check`.
+Confirm the workspace passes without any warnings or feature-unification leaks.
+"""
+
+[[step]]
+id = "test-suite"
+title = "Execute Cargo test suite (-j 2)"
+kind = "test"
+agent = "auto"
+deps = ["clippy-check"]
+verify_cmd = ["cargo", "test", "--locked", "-p", "{{params.package}}", "-j", "2"]
+prompt = """
+Run unit and integration test suites with mandatory host throttling:
+`cargo test --locked -p {{params.package}} -j 2`
+All tests must pass.
+"""
+
+[[step]]
+id = "operator-gate"
+title = "Operator sign-off gate"
+kind = "gate"
+gate = "heimdal:approval"
+deps = ["test-suite"]
+prompt = """
+Review verification receipts (fmt, hygiene, clippy, tests).
+Approve gate to permit PR landing or promotion.
+"""

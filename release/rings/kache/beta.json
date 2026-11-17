@@ -1,0 +1,13 @@
+{
+  "unit": "kache",
+  "channel": "beta",
+  "version": "2.0.0-rc.4",
+  "git_commit": "b464957793c1d1952c0f6979f01fe813f266fcac",
+  "published_at": "2026-11-17T01:48:00Z",
+  "unreleased": true,
+  "min_compatible_version": null,
+  "binaries": [],
+  "images": [],
+  "chart": null,
+  "previous": null
+}

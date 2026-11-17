@@ -121,7 +121,7 @@ jobs:
         # compile with Cargo.toml's version from this PR.
         env:
           KACHE_SELF_HOST: ${{ steps.stable_kache.outcome == 'success' && '1' || '0' }}
-        run: env -u KACHE_VERSION ./scripts/with-test-resources.sh just ci
+        run: env -u KACHE_VERSION ./scripts/with-test-resources.sh make ci
         timeout-minutes: 30
       - name: Check crates.io package metadata
         # Cargo stages workspace dependencies together, including crates whose
@@ -133,7 +133,7 @@ jobs:
         # Enforced on PRs too, not just push: in a trunk-based model a PR that
         # drops coverage must fail before merge, not after on the main push.
         run: |
-          just coverage-scope-check
+          make coverage-scope-check
           python3 -c "
           import json, sys
           data = json.load(open('tmp/llvm-cov/coverage.json'))
@@ -298,28 +298,29 @@ jobs:
         with:
           tool: cargo-mutants@27.1.0
           fallback: none
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: kunobi-ninja/kache-action@49398d37113c616fdb61be434cb497e3c2c8f3e6 # v1
         with:
-          shared-key: mutants
-          cache-bin: false
-          cache-on-failure: false
+          github-cache: "true"
+          cache-executables: "false"
+          cache-key-prefix: kache-mutants
       - name: Verify complete mutation scope is non-empty
         run: |
           mkdir -p tmp/mutants
           count="$(
-            cargo mutants --package kache-core --all-features --list --json |
+            env -u KACHE_VERSION cargo mutants --package kache-core --all-features --list --json |
               python3 -c 'import json, sys; print(len(json.load(sys.stdin)))'
           )"
           echo "kache-core mutants: $count"
           test "$count" -gt 0
       - name: Mutate all kache-core behavior
         timeout-minutes: 15
-        # rust-cache exports CARGO_INCREMENTAL=0 after the job-level env is
-        # evaluated. Mutation builds deliberately need incremental reuse.
         env:
           CARGO_INCREMENTAL: "1"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          KACHE_READ_ONLY: ${{ github.ref == 'refs/heads/main' && 'false' || 'true' }}
         run: |
-          cargo mutants \
+          env -u KACHE_VERSION cargo mutants \
             --package kache-core \
             --all-features \
             --in-place \
@@ -371,16 +372,16 @@ jobs:
         with:
           tool: cargo-mutants@27.1.0
           fallback: none
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: kunobi-ninja/kache-action@49398d37113c616fdb61be434cb497e3c2c8f3e6 # v1
         with:
-          shared-key: mutants
-          cache-bin: false
-          cache-on-failure: false
+          github-cache: "true"
+          cache-executables: "false"
+          cache-key-prefix: kache-mutants
       - name: Verify complete service mutation scope is non-empty
         run: |
           mkdir -p tmp/mutants
           count="$(
-            cargo mutants --package kache-service --all-features --list --json |
+            env -u KACHE_VERSION cargo mutants --package kache-service --all-features --list --json |
               python3 -c 'import json, sys; print(len(json.load(sys.stdin)))'
           )"
           echo "kache-service mutants: $count"
@@ -397,8 +398,11 @@ jobs:
         timeout-minutes: 30
         env:
           CARGO_INCREMENTAL: "1"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          KACHE_READ_ONLY: ${{ github.ref == 'refs/heads/main' && 'false' || 'true' }}
         run: |
-          cargo mutants \
+          env -u KACHE_VERSION cargo mutants \
             --package kache-service \
             --all-features \
             --in-place \
@@ -455,17 +459,18 @@ jobs:
         with:
           tool: cargo-mutants@27.1.0
           fallback: none
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: kunobi-ninja/kache-action@49398d37113c616fdb61be434cb497e3c2c8f3e6 # v1
         with:
-          shared-key: mutants
-          cache-bin: false
-          cache-on-failure: false
+          github-cache: "true"
+          cache-executables: "false"
+          cache-key-prefix: kache-mutants
       - name: Mutate changed Rust behavior
         timeout-minutes: 45
-        # Keep this step-local: rust-cache otherwise overrides the job-level
-        # setting and every changed-line mutant rebuilds the crate from scratch.
         env:
           CARGO_INCREMENTAL: "1"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          KACHE_READ_ONLY: ${{ github.ref == 'refs/heads/main' && 'false' || 'true' }}
         run: |
           test -s tmp/mutants/pr.diff
           # Shard 0 checks the unmutated baseline for the whole matrix.
@@ -473,7 +478,7 @@ jobs:
           # --timeout also bounds the baseline. Its full suite reached the
           # final integration binary at 300 s in run 39962317701. Give shard
           # zero 450 s; keep the other workers' 300 s bound.
-          ./scripts/with-test-resources.sh cargo mutants \
+          env -u KACHE_VERSION ./scripts/with-test-resources.sh cargo mutants \
             --workspace \
             --all-features \
             --in-diff tmp/mutants/pr.diff \
@@ -723,10 +728,10 @@ jobs:
           install: true
           # Pin mise CLI — see the `check` job's note (v2026.6.10 regression).
           version: 2026.6.9
-          install_args: rust github:casey/just aqua:EmbarkStudios/cargo-deny
+          install_args: rust aqua:EmbarkStudios/cargo-deny
           cache: false
       - name: cargo deny check
-        run: just audit
+        run: make audit
 
   # --- Real CUDA toolkit validation ---
   # Installs the real CUDA toolkit and runs the nvcc integration tests,
@@ -753,11 +758,11 @@ jobs:
           version: 2026.6.9
           install_args: rust
           cache: false
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: kunobi-ninja/kache-action@49398d37113c616fdb61be434cb497e3c2c8f3e6 # v1
         with:
-          shared-key: cuda
-          cache-bin: false
-          cache-on-failure: false
+          github-cache: "true"
+          cache-executables: "false"
+          cache-key-prefix: kache-cuda
       # Pinned CUDA 12.8: mature, version-agnostic for the adapter, and new
       # enough to cover every flag shape it models. `cuda-toolkit` (not the
       # `cuda` metapackage) so no kernel driver is installed.
@@ -795,7 +800,11 @@ jobs:
           echo '--- nvcc -M ---'
           nvcc -M kernel.cu || echo "-M exit: $?"
       - name: Run nvcc integration tests
-        run: cargo test --test nvcc_cuda_toolchain_test
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          KACHE_READ_ONLY: ${{ github.ref == 'refs/heads/main' && 'false' || 'true' }}
+        run: env -u KACHE_VERSION cargo test --test nvcc_cuda_toolchain_test
 
   # Linux evaluates every system (catches #597-style eval breakage) and builds
   # the Linux package. macOS actually *builds* the Darwin package: stdenv sets

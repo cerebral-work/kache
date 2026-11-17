@@ -7,7 +7,7 @@ on:
       - "crates/kache-service/**"
       - "packaging/docker/**"
       - "packaging/docker-bake.hcl"
-      - "Justfile"
+      - "Makefile"
       - ".github/workflows/service-image.yml"
   push:
     branches: [main, dev]
@@ -16,7 +16,7 @@ on:
       - "crates/kache-service/**"
       - "packaging/docker/**"
       - "packaging/docker-bake.hcl"
-      - "Justfile"
+      - "Makefile"
       - ".github/workflows/service-image.yml"
   workflow_dispatch:
 
@@ -107,4 +107,4 @@ jobs:
           BUILD_VERSION: ${{ steps.meta.outputs.build_version }}
           BUILD_COMMIT: ${{ github.sha }}
           BUILD_DATE: ${{ steps.meta.outputs.build_date }}
-        run: just image-service-release
+        run: make image-service-release

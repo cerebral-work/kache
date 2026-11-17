@@ -1,0 +1,68 @@
+$schema: https://projectfile.org/schema/v1.json
+kind: SoftwareSourceCode
+
+identity:
+  namespace: work.cerebral
+  name: kache
+  version: "2.0.0-rc.4"
+  title:
+    en: "Kache"
+  summary:
+    en: "Compiler cache for Rust, C/C++, and CUDA, with S3, GCS, shared-filesystem, and OCI remotes."
+  created: "2026-01-01"
+  modified: "2026-11-16"
+
+repositories:
+  - url: "https://github.com/cerebral-work/kache.git"
+    type: git
+    branch: main
+    role: origin
+
+links:
+  - type: source-code
+    url: https://github.com/cerebral-work/kache
+  - type: bugs
+    url: https://github.com/cerebral-work/kache/issues
+
+license:
+  spdx: Apache-2.0
+  file: LICENSE
+
+copyright:
+  year: 2026
+
+organizations:
+  - name: "Cerebral Work Institute"
+    url: https://github.com/cerebral-work
+    roles: [maintainer]
+
+keywords:
+  - build-cache
+  - rustc-wrapper
+  - blake3
+  - cargo
+  - cuda
+  - rust
+
+org.projectfile.ci:
+  nodes:
+    - id: version-consistency
+      run: "./scripts/check-version-consistency.sh"
+    - id: docs-check
+      run: "bash scripts/check-docs.sh"
+    - id: fmt
+      run: "make fmt-check"
+    - id: clippy
+      depends_on: [fmt, version-consistency]
+      run: "cargo clippy --workspace --locked -j 2 --all-targets -- -D warnings"
+    - id: client-crates-check
+      depends_on: [fmt]
+      run: "make client-crates-check"
+    - id: test
+      depends_on: [clippy, client-crates-check]
+      run: "./scripts/with-test-resources.sh cargo test --workspace --locked -j 2"
+    - id: audit
+      run: "make audit"
+    - id: helm-lint
+      depends_on: [version-consistency]
+      run: "make helm-lint"

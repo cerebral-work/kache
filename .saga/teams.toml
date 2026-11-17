@@ -1,0 +1,30 @@
+# Saga Team Archetypes — Kache
+
+[teams.kache-solo]
+description = "Sovereign solo coordinator lane for Kache"
+topology = "solo"
+
+[[teams.kache-solo.members]]
+role = "kache-coordinator"
+kind = "agy"
+slot = 0
+authority = "sovereign"
+prompt = "AGENTS.md"
+
+[teams.kache-dual]
+description = "Paired coordinator + critic lane for Kache planner soundness, cache-key determinism, and mutation gates"
+topology = "dual-h"
+
+[[teams.kache-dual.members]]
+role = "kache-coordinator"
+kind = "agy"
+slot = 0
+authority = "sovereign"
+prompt = "AGENTS.md"
+
+[[teams.kache-dual.members]]
+role = "code-critic"
+kind = "claude"
+slot = 1
+authority = "advisory"
+prompt = "Audit kache-core hermetic planner purity, cache-key soundness across Rust/C/C++/CUDA shims, remote store atomicity, and cargo-mutants kill coverage."

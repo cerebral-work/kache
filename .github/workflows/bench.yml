@@ -394,7 +394,7 @@ jobs:
           install: true
           # Pin mise CLI — see ci.yml (v2026.6.10 regression).
           version: 2026.6.9
-          install_args: --force rust github:casey/just${{ (endsWith(matrix.name, '-sccache') || contains(github.event.inputs.extra_args, '--sccache')) && ' github:mozilla/sccache' || '' }}
+          install_args: --force rust${{ (endsWith(matrix.name, '-sccache') || contains(github.event.inputs.extra_args, '--sccache')) && ' github:mozilla/sccache' || '' }}
           cache: false
           reshim: false
 
@@ -404,7 +404,7 @@ jobs:
         with:
           install: true
           version: 2026.6.9
-          install_args: --force rust github:casey/just${{ (endsWith(matrix.name, '-sccache') || contains(github.event.inputs.extra_args, '--sccache')) && ' github:mozilla/sccache' || '' }}
+          install_args: --force rust${{ (endsWith(matrix.name, '-sccache') || contains(github.event.inputs.extra_args, '--sccache')) && ' github:mozilla/sccache' || '' }}
           cache: false
           reshim: false
 
@@ -448,19 +448,49 @@ jobs:
         # means the run did not validly exercise kache, so we surface it as a
         # failure rather than uploading a misleading green report.
         run: |
-          rustc --version && cargo --version && just --version
+          rustc --version && cargo --version
           # The short suites (hk, eza, aube) stop five minutes before this
           # step's limit and report what they finished; a killed step
           # reports nothing. Other arms ignore it.
           export BENCH_DEADLINE_AT=$(( $(date +%s) + (${{ matrix.timeout }} - 5) * 60 ))
           # EXTRA_ARGS is passed via env (not interpolated into the command line)
           # so a dispatch input can't inject shell. Unquoted on purpose: the
-          # bench flags (e.g. `--skip-clone --retry`) must word-split. matrix.cmd
-          # is the full recipe + profile, e.g. "bench firefox" or
-          # "bench-sccache firefox".
+          # bench flags (e.g. `--skip-clone --retry`) must word-split.
           # shellcheck disable=SC2086
-          just ${{ matrix.cmd }} $EXTRA_ARGS
+          set -- $MATRIX_CMD $EXTRA_ARGS
+          subcmd="$1"
+          shift
+          case "$subcmd" in
+            bench)
+              profile="$1"; shift
+              cargo build --release -j 2 -p kache
+              cargo build --release -j 2 -p kache-e2e --bin kache-scenario
+              ./target/release/kache-scenario --kache ./target/release/kache --select suite:bench --select backend:kache --profile "$profile" "$@"
+              ;;
+            bench-short)
+              project="$1"; samples="${2:-6}"; shift 2
+              cargo build --release -j 2 -p kache -p kache-e2e --bin kache --bin kache-engine --bin kache-scenario
+              python3 scripts/bench-short.py --project "$project" --samples "$samples" \
+                --engine target/release/kache-scenario --kache target/release/kache \
+                --output "tmp/bench/bench-${project}" "$@"
+              ;;
+            bench-sccache)
+              profile="$1"; shift
+              cargo build --release -j 2 -p kache-e2e --bin kache-scenario
+              ./target/release/kache-scenario --cache-backend sccache --select suite:bench --select backend:sccache --profile "$profile" "$@"
+              ;;
+            bench-mbx)
+              profile="$1"; shift
+              cargo build --release -j 2 -p kache-e2e --bin kache-scenario
+              ./target/release/kache-scenario --cache-backend mbx --select suite:bench --select backend:mbx --profile "$profile" "$@"
+              ;;
+            *)
+              echo "Unknown benchmark command: $subcmd" >&2
+              exit 1
+              ;;
+          esac
         env:
+          MATRIX_CMD: ${{ matrix.cmd }}
           # Empty on schedule; the dispatch input otherwise (`--skip-clone`, …).
           EXTRA_ARGS: ${{ github.event.inputs.extra_args }}
           # bench-short alternates tools between samples but measures cold in

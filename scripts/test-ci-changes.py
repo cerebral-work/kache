@@ -58,7 +58,7 @@ class ChangeTests(unittest.TestCase):
             "crates/kache-store/src/lib.rs",
             "tests/integration_test.rs",
             ".config/nextest.toml",
-            "Justfile",
+            "Makefile",
             "mise.toml",
             "deny.toml",
             "test-projects/hello/Cargo.toml",
