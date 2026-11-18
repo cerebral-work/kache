@@ -1,0 +1,8 @@
+# Opt-in for the vilicus merge train (cerebral-work/vilicus SPEC-0023, binary vilicus-train).
+# The train queues a PR only when it carries the label `train`. Drafts and forks are never queued.
+# It replays each queued PR's commits onto a batch tip, requires every required check green on
+# that exact tip, and fast-forwards the target branch through the GitHub API.
+enabled = true
+max_batch = 4
+auto_queue = []
+land_release_please = false
